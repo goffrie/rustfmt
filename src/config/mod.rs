@@ -64,6 +64,11 @@ create_config! {
     imports_indent: IndentStyle, IndentStyle::Block, false, "Indent of imports";
     imports_layout: ListTactic, ListTactic::Mixed, false, "Item layout inside a import block";
     merge_imports: bool, false, false, "Merge imports";
+    merge_import_paragraphs: bool, false, false, "Merge import blocks across paragraphs";
+    unnest_imports: bool, false, false, "Break nested import groups";
+    group_imports: GroupImports, GroupImports::default(), false, "Group imports into (std, external, crate) order";
+    group_import_minimum: usize, 0, false, "Minimum number of imports to apply grouping";
+    normalize_self_list: bool, false, false, "(Unsound) Normalize `use foo::{self}` to `use foo`";
 
     // Ordering
     reorder_imports: bool, true, true, "Reorder import and extern crate statements alphabetically";
