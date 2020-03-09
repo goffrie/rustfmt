@@ -1,4 +1,5 @@
-use std::collections::{hash_set, HashSet};
+use std::collections::{hash_set, HashMap, HashSet};
+use std::convert::TryFrom;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -380,5 +381,64 @@ impl From<Edition> for rustc_span::edition::Edition {
             Edition::Edition2015 => Self::Edition2015,
             Edition::Edition2018 => Self::Edition2018,
         }
+    }
+}
+
+/// Configures rustfmt to separate imports into multiple groups.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "Vec<Vec<String>>")]
+#[serde(into = "Vec<Vec<String>>")]
+pub struct GroupImports {
+    pub groups: Vec<Vec<String>>,
+    pub default_group: usize,
+    pub group_by_crate: HashMap<String, usize>,
+}
+
+impl fmt::Display for GroupImports {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", &self.groups)
+    }
+}
+
+impl std::str::FromStr for GroupImports {
+    type Err = &'static str;
+
+    fn from_str(_: &str) -> Result<Self, Self::Err> {
+        Err("GroupImports is not parsable")
+    }
+}
+
+impl Default for GroupImports {
+    fn default() -> GroupImports {
+        GroupImports {
+            groups: vec![vec!["*".into()]],
+            default_group: 0,
+            group_by_crate: HashMap::new(),
+        }
+    }
+}
+
+impl TryFrom<Vec<Vec<String>>> for GroupImports {
+    type Error = &'static str;
+    fn try_from(groups: Vec<Vec<String>>) -> Result<GroupImports, &'static str> {
+        let mut group_by_crate: HashMap<String, usize> = groups
+            .iter()
+            .enumerate()
+            .flat_map(|(i, crates)| crates.iter().map(move |c| (c.clone(), i)))
+            .collect();
+        let default_group = group_by_crate
+            .remove("*")
+            .ok_or("Must specify a default group with a *")?;
+        Ok(GroupImports {
+            groups,
+            default_group,
+            group_by_crate,
+        })
+    }
+}
+
+impl From<GroupImports> for Vec<Vec<String>> {
+    fn from(group_imports: GroupImports) -> Self {
+        group_imports.groups
     }
 }

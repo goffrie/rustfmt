@@ -8,11 +8,12 @@
 
 use std::cmp::{Ord, Ordering};
 
+use itertools::Itertools;
 use rustc_span::{symbol::sym, Span};
 use syntax::{ast, attr};
 
 use crate::config::Config;
-use crate::imports::{merge_use_trees, UseTree};
+use crate::imports::{group_imports, merge_use_trees, unnest_use_trees, NormalizeSelf, UseTree};
 use crate::items::{is_mod_decl, rewrite_extern_crate, rewrite_mod};
 use crate::lists::{itemize_list, write_list, ListFormatting, ListItem};
 use crate::rewrite::RewriteContext;
@@ -85,9 +86,16 @@ fn rewrite_reorderable_items(
     match reorderable_items[0].kind {
         // FIXME: Remove duplicated code.
         ast::ItemKind::Use(..) => {
+            let normalize_self = if context.config.normalize_self_list() {
+                NormalizeSelf::Yes
+            } else {
+                NormalizeSelf::No
+            };
             let mut normalized_items: Vec<_> = reorderable_items
                 .iter()
-                .filter_map(|item| UseTree::from_ast_with_normalization(context, item))
+                .filter_map(|item| {
+                    UseTree::from_ast_with_normalization(context, item, normalize_self)
+                })
                 .collect();
             let cloned = normalized_items.clone();
             // Add comments before merging.
@@ -109,19 +117,38 @@ fn rewrite_reorderable_items(
             if context.config.merge_imports() {
                 normalized_items = merge_use_trees(normalized_items);
             }
+            if context.config.unnest_imports() {
+                normalized_items = unnest_use_trees(normalized_items, normalize_self);
+            }
             normalized_items.sort();
 
-            // 4 = "use ", 1 = ";"
-            let nested_shape = shape.offset_left(4)?.sub_width(1)?;
-            let item_vec: Vec<_> = normalized_items
-                .into_iter()
-                .map(|use_tree| ListItem {
-                    item: use_tree.rewrite_top_level(context, nested_shape),
-                    ..use_tree.list_item.unwrap_or_else(ListItem::empty)
-                })
-                .collect();
+            let import_groups = if normalized_items.len() >= context.config.group_import_minimum() {
+                group_imports(normalized_items, &context.config.group_imports())
+            } else {
+                vec![normalized_items]
+            };
 
-            wrap_reorderable_items(context, &item_vec, nested_shape)
+            let combined = import_groups
+                .into_iter()
+                .filter_map(|group| {
+                    // 4 = "use ", 1 = ";"
+                    let nested_shape = shape.offset_left(4)?.sub_width(1)?;
+                    let items: Vec<_> = group
+                        .into_iter()
+                        .map(move |use_tree| ListItem {
+                            item: use_tree.rewrite_top_level(context, nested_shape),
+                            ..use_tree.list_item.unwrap_or_else(ListItem::empty)
+                        })
+                        .collect();
+                    wrap_reorderable_items(context, &items, nested_shape)
+                })
+                .filter(|s| !s.is_empty())
+                .join(&format!(
+                    "\n\n{}",
+                    shape.indent.to_string(&context.config)
+                ));
+
+            Some(combined)
         }
         _ => {
             let list_items = itemize_list(
@@ -214,7 +241,9 @@ impl<'b, 'a: 'b> FmtVisitor<'a> {
                 item_kind.is_same_item_kind(&***ppi)
                     && (!in_group || {
                         let current = self.parse_sess.lookup_line_range(ppi.span());
-                        let in_same_group = current.lo < last.hi + 2;
+                        let in_same_group = current.lo < last.hi + 2
+                            || (item_kind == ReorderableItemKind::Use
+                                && self.config.merge_import_paragraphs());
                         last = current;
                         in_same_group
                     })
